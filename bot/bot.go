@@ -15,6 +15,11 @@ import (
 	"maxxx-agency/store"
 )
 
+const (
+	maxGoalLen    = 777
+	maxMessageLen = 4000
+)
+
 type Config struct {
 	AllowedUserID    int64
 	DailyCheckinHour int
@@ -213,6 +218,9 @@ func (b *Bot) handleGoal(parts []string, st *store.State) string {
 			return "Usage: /goal add <goal text>"
 		}
 		goal := strings.Join(parts[2:], " ")
+		if len(goal) > maxGoalLen {
+			return lang.Getf(st.Language, "goal_too_long", maxGoalLen)
+		}
 		if err := b.store.AddGoal(b.cfg.AllowedUserID, goal); err != nil {
 			log.Printf("add goal: %v", err)
 			return "Error adding goal."
@@ -300,6 +308,12 @@ func (b *Bot) handleTone(parts []string, st *store.State) string {
 }
 
 func (b *Bot) handleChat(chatID int64, text string) {
+	if len(text) > maxMessageLen {
+		st, _ := b.store.EnsureState(b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
+		b.send(chatID, lang.Getf(st.Language, "message_too_long", maxMessageLen))
+		return
+	}
+
 	st, err := b.store.EnsureState(b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 	if err != nil {
 		log.Printf("ensure state: %v", err)

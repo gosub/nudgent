@@ -36,6 +36,8 @@ var strings = map[string]map[string]string{
 		"help_tone":         "/tone [warm|direct|drill-sergeant] - Show/set tone",
 		"help_reset":        "/reset - Clear conversation context",
 		"help_help":         "/help - Show this message",
+		"goal_too_long":     "Goal is too long (max %d characters).",
+		"message_too_long":  "Message is too long (max %d characters).",
 	},
 	"it": {
 		"welcome":           "Bentornato. Dove sei nel piano?",
@@ -70,6 +72,8 @@ var strings = map[string]map[string]string{
 		"help_tone":         "/tone [warm|direct|drill-sergeant] - Mostra/cambia tono",
 		"help_reset":        "/reset - Cancella contesto conversazione",
 		"help_help":         "/help - Mostra questo messaggio",
+		"goal_too_long":     "Obiettivo troppo lungo (max %d caratteri).",
+		"message_too_long":  "Messaggio troppo lungo (max %d caratteri).",
 	},
 }
 
