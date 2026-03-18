@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"maxxx-agency/bot"
 	"maxxx-agency/coach"
+	"maxxx-agency/log"
 	"maxxx-agency/store"
 )
 
@@ -30,61 +30,63 @@ type Config struct {
 }
 
 func main() {
+	logMode := os.Getenv("LOG_FORMAT") != "json"
+	log.Init(logMode)
+	logger := log.Logger.With().Str("component", "main").Logger()
+
 	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: .env file not found: %v", err)
+		logger.Warn().Err(err).Msg("no .env file found")
 	}
 
 	var cfg Config
 	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
-		log.Fatalf("Failed to load config.toml: %v", err)
+		logger.Fatal().Err(err).Msg("failed to load config.toml")
 	}
 
 	telegramToken := os.Getenv(cfg.TelegramTokenEnv)
 	if telegramToken == "" {
-		log.Fatalf("Missing env var: %s", cfg.TelegramTokenEnv)
+		logger.Fatal().Str("var", cfg.TelegramTokenEnv).Msg("missing env var")
 	}
 
 	openrouterKey := os.Getenv(cfg.OpenRouterKeyEnv)
 	if openrouterKey == "" {
-		log.Fatalf("Missing env var: %s", cfg.OpenRouterKeyEnv)
+		logger.Fatal().Str("var", cfg.OpenRouterKeyEnv).Msg("missing env var")
 	}
 
 	allowedUserIDStr := os.Getenv(cfg.AllowedUserIDEnv)
 	if allowedUserIDStr == "" {
-		log.Fatalf("Missing env var: %s", cfg.AllowedUserIDEnv)
+		logger.Fatal().Str("var", cfg.AllowedUserIDEnv).Msg("missing env var")
 	}
 	allowedUserID, err := strconv.ParseInt(allowedUserIDStr, 10, 64)
 	if err != nil {
-		log.Fatalf("Invalid ALLOWED_USER_ID: %v", err)
+		logger.Fatal().Err(err).Msg("invalid ALLOWED_USER_ID")
 	}
 	if allowedUserID == 0 {
-		log.Fatal("ALLOWED_USER_ID must be non-zero")
+		logger.Fatal().Msg("ALLOWED_USER_ID must be non-zero")
 	}
 
 	if cfg.DailyCheckinHour < 0 || cfg.DailyCheckinHour > 23 {
-		log.Fatal("daily_checkin_hour must be 0-23")
+		logger.Fatal().Int("hour", cfg.DailyCheckinHour).Msg("daily_checkin_hour must be 0-23")
 	}
 
 	validTones := map[string]bool{"warm": true, "direct": true, "drill-sergeant": true}
 	if !validTones[cfg.Tone] {
-		log.Fatalf("Invalid tone: %s (must be warm, direct, or drill-sergeant)", cfg.Tone)
+		logger.Fatal().Str("tone", cfg.Tone).Msg("invalid tone")
 	}
 
 	compendium, err := os.ReadFile("AGENCY-COMPENDIUM.md")
 	if err != nil {
-		log.Fatalf("Failed to read AGENCY-COMPENDIUM.md: %v", err)
+		logger.Fatal().Err(err).Msg("failed to read AGENCY-COMPENDIUM.md")
 	}
 
 	s, err := store.New("agency.db")
 	if err != nil {
-		log.Fatalf("Failed to init store: %v", err)
+		logger.Fatal().Err(err).Msg("failed to init store")
 	}
 	defer s.Close()
 
-	// Ensure initial state
-	_, err = s.EnsureState(context.Background(), allowedUserID, cfg.Language, cfg.Tone)
-	if err != nil {
-		log.Fatalf("Failed to ensure state: %v", err)
+	if _, err = s.EnsureState(context.Background(), allowedUserID, cfg.Language, cfg.Tone); err != nil {
+		logger.Fatal().Err(err).Msg("failed to ensure state")
 	}
 
 	c := coach.New(openrouterKey, cfg.Model)
@@ -99,12 +101,18 @@ func main() {
 		BotName:          cfg.BotName,
 	}, string(compendium))
 	if err != nil {
-		log.Fatalf("Failed to init bot: %v", err)
+		logger.Fatal().Err(err).Msg("failed to init bot")
 	}
 
-	fmt.Printf("Starting %s (ID: %d, Lang: %s, Tone: %s)\n",
-		cfg.BotName, allowedUserID, cfg.Language, cfg.Tone)
-	fmt.Printf("Daily check-in at %d:00 %s\n", cfg.DailyCheckinHour, cfg.Timezone)
+	logger.Info().
+		Str("bot", cfg.BotName).
+		Int64("user_id", allowedUserID).
+		Str("lang", cfg.Language).
+		Str("tone", cfg.Tone).
+		Int("checkin_hour", cfg.DailyCheckinHour).
+		Str("timezone", cfg.Timezone).
+		Str("model", cfg.Model).
+		Msg("starting")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,9 +121,14 @@ func main() {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
 
-	fmt.Println("\nShutting down...")
+	logger.Info().Str("signal", sig.String()).Msg("shutting down")
 	cancel()
+
+	if ce := logger.Trace(); ce.Enabled() {
+		// small delay to let context cancellation propagate
+		ce.Msg("shutdown complete")
+	}
 	fmt.Println("Goodbye!")
 }

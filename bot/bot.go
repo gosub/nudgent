@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"maxxx-agency/coach"
 	"maxxx-agency/lang"
+	"maxxx-agency/log"
 	"maxxx-agency/store"
 )
 
@@ -23,6 +23,8 @@ const (
 	telegramPollTimeout = 60
 	schedulerTickMin    = 1
 )
+
+var logger = log.Logger.With().Str("component", "bot").Logger()
 
 type Config struct {
 	AllowedUserID    int64
@@ -63,7 +65,7 @@ func New(token string, c *coach.Coach, s *store.Store, cfg Config, compendium st
 		loc:        loc,
 	}
 
-	log.Printf("Authorized on account %s", api.Self.UserName)
+	logger.Info().Str("account", api.Self.UserName).Msg("authorized on telegram")
 	return b, nil
 }
 
@@ -79,12 +81,14 @@ func (b *Bot) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			b.api.StopReceivingUpdates()
+			logger.Debug().Msg("stopped receiving updates")
 			return
 		case update := <-updates:
 			if update.Message == nil {
 				continue
 			}
 			if update.Message.From.ID != b.cfg.AllowedUserID {
+				logger.Debug().Int64("from", update.Message.From.ID).Msg("ignored message from unknown user")
 				continue
 			}
 			b.handleMessage(ctx, update.Message)
@@ -96,11 +100,15 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	text := msg.Text
 	chatID := msg.Chat.ID
 
+	l := logger.With().Int64("chat_id", chatID).Logger()
+
 	if strings.HasPrefix(text, "/") {
+		l.Debug().Str("text", text).Msg("handling command")
 		b.handleCommand(ctx, chatID, text)
 		return
 	}
 
+	l.Debug().Int("len", len(text)).Msg("handling chat message")
 	b.handleChat(ctx, chatID, text)
 }
 
@@ -109,9 +117,11 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 	cmd := strings.TrimPrefix(parts[0], "@"+b.api.Self.UserName)
 	cmd = strings.ToLower(cmd)
 
+	l := logger.With().Int64("chat_id", chatID).Str("cmd", cmd).Logger()
+
 	st, err := b.store.EnsureState(ctx, b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 	if err != nil {
-		log.Printf("ensure state: %v", err)
+		l.Error().Err(err).Msg("ensure state failed")
 		b.send(chatID, "Something went wrong. Please try again.")
 		return
 	}
@@ -131,7 +141,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 	case "/rejection":
 		count, err := b.store.AddRejection(ctx, b.cfg.AllowedUserID)
 		if err != nil {
-			log.Printf("add rejection: %v", err)
+			l.Error().Err(err).Msg("add rejection failed")
 			b.send(chatID, "Could not log rejection. Please try again.")
 			return
 		}
@@ -142,7 +152,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 
 	case "/skip":
 		if err := b.store.MarkCheckin(ctx, b.cfg.AllowedUserID); err != nil {
-			log.Printf("mark checkin: %v", err)
+			l.Error().Err(err).Msg("mark checkin failed")
 			b.send(chatID, "Could not skip check-in. Please try again.")
 			return
 		}
@@ -156,7 +166,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 
 	case "/reset":
 		if err := b.store.SetConversationHistory(ctx, b.cfg.AllowedUserID, []map[string]string{}); err != nil {
-			log.Printf("reset history: %v", err)
+			l.Error().Err(err).Msg("reset history failed")
 			b.send(chatID, "Could not reset context. Please try again.")
 			return
 		}
@@ -187,7 +197,7 @@ func (b *Bot) buildHelp(l string) string {
 func (b *Bot) buildStatus(ctx context.Context, st *store.State) string {
 	goals, err := b.store.GetGoals(ctx, b.cfg.AllowedUserID)
 	if err != nil {
-		log.Printf("get goals: %v", err)
+		logger.Error().Err(err).Msg("get goals failed")
 		goals = []string{}
 	}
 
@@ -226,7 +236,7 @@ func (b *Bot) handleGoal(ctx context.Context, parts []string, st *store.State) s
 			return lang.Getf(st.Language, "goal_too_long", maxGoalLen)
 		}
 		if err := b.store.AddGoal(ctx, b.cfg.AllowedUserID, goal); err != nil {
-			log.Printf("add goal: %v", err)
+			logger.Error().Err(err).Str("goal", goal).Msg("add goal failed")
 			return "Error adding goal."
 		}
 		return lang.Getf(st.Language, "goal_added", goal)
@@ -234,7 +244,7 @@ func (b *Bot) handleGoal(ctx context.Context, parts []string, st *store.State) s
 	case "list":
 		goals, err := b.store.GetGoals(ctx, b.cfg.AllowedUserID)
 		if err != nil {
-			log.Printf("list goals: %v", err)
+			logger.Error().Err(err).Msg("list goals failed")
 			return "Error listing goals."
 		}
 		if len(goals) == 0 {
@@ -257,7 +267,7 @@ func (b *Bot) handleGoal(ctx context.Context, parts []string, st *store.State) s
 		}
 		goals, err := b.store.GetGoals(ctx, b.cfg.AllowedUserID)
 		if err != nil {
-			log.Printf("get goals for done: %v", err)
+			logger.Error().Err(err).Msg("get goals for done failed")
 			return "Error completing goal."
 		}
 		if idx < 1 || idx > len(goals) {
@@ -265,7 +275,7 @@ func (b *Bot) handleGoal(ctx context.Context, parts []string, st *store.State) s
 		}
 		goalName := goals[idx-1]
 		if err := b.store.CompleteGoal(ctx, b.cfg.AllowedUserID, idx-1); err != nil {
-			log.Printf("complete goal: %v", err)
+			logger.Error().Err(err).Str("goal", goalName).Msg("complete goal failed")
 			return "Error completing goal."
 		}
 		return lang.Getf(st.Language, "goal_completed", goalName)
@@ -286,9 +296,10 @@ func (b *Bot) handleLang(ctx context.Context, parts []string, st *store.State) s
 	}
 
 	if err := b.store.SetLanguage(ctx, b.cfg.AllowedUserID, newLang); err != nil {
-		log.Printf("set language: %v", err)
+		logger.Error().Err(err).Str("lang", newLang).Msg("set language failed")
 		return "Error setting language."
 	}
+	logger.Info().Str("lang", newLang).Msg("language changed")
 	return lang.Getf(newLang, "lang_switched", newLang)
 }
 
@@ -305,13 +316,16 @@ func (b *Bot) handleTone(ctx context.Context, parts []string, st *store.State) s
 	}
 
 	if err := b.store.SetTone(ctx, b.cfg.AllowedUserID, newTone); err != nil {
-		log.Printf("set tone: %v", err)
+		logger.Error().Err(err).Str("tone", newTone).Msg("set tone failed")
 		return "Error setting tone."
 	}
+	logger.Info().Str("tone", newTone).Msg("tone changed")
 	return lang.Getf(st.Language, "tone_switched", newTone)
 }
 
 func (b *Bot) handleChat(ctx context.Context, chatID int64, text string) {
+	l := logger.With().Int64("chat_id", chatID).Logger()
+
 	if len(text) > maxMessageLen {
 		st, _ := b.store.EnsureState(ctx, b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 		b.send(chatID, lang.Getf(st.Language, "message_too_long", maxMessageLen))
@@ -320,14 +334,14 @@ func (b *Bot) handleChat(ctx context.Context, chatID int64, text string) {
 
 	st, err := b.store.EnsureState(ctx, b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 	if err != nil {
-		log.Printf("ensure state: %v", err)
+		l.Error().Err(err).Msg("ensure state failed")
 		b.send(chatID, "Something went wrong. Please try again.")
 		return
 	}
 
 	goals, err := b.store.GetGoals(ctx, b.cfg.AllowedUserID)
 	if err != nil {
-		log.Printf("get goals: %v", err)
+		l.Error().Err(err).Msg("get goals failed")
 		goals = []string{}
 	}
 
@@ -347,16 +361,17 @@ func (b *Bot) handleChat(ctx context.Context, chatID int64, text string) {
 
 	history, err := b.store.GetConversationHistory(ctx, b.cfg.AllowedUserID)
 	if err != nil {
-		log.Printf("get history: %v", err)
+		l.Error().Err(err).Msg("get history failed")
 		history = []map[string]string{}
 	}
 
+	l.Debug().Int("history_len", len(history)).Msg("calling coach")
 	response, err := b.coach.Chat(ctx, systemPrompt, history, text)
 	if err != nil {
 		if ctx.Err() != nil {
-			return // context cancelled, don't send anything
+			return
 		}
-		log.Printf("coach chat: %v", err)
+		l.Error().Err(err).Msg("coach chat failed")
 		b.send(chatID, "Sorry, I couldn't process that. Try again.")
 		return
 	}
@@ -369,7 +384,7 @@ func (b *Bot) handleChat(ctx context.Context, chatID int64, text string) {
 	}
 
 	if err := b.store.SetConversationHistory(ctx, b.cfg.AllowedUserID, history); err != nil {
-		log.Printf("save history: %v", err)
+		l.Error().Err(err).Msg("save history failed")
 	}
 
 	b.send(chatID, response)
@@ -379,9 +394,13 @@ func (b *Bot) dailyScheduler(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(schedulerTickMin) * time.Minute)
 	defer ticker.Stop()
 
+	l := logger.With().Str("handler", "scheduler").Logger()
+	l.Debug().Int("hour", b.cfg.DailyCheckinHour).Str("tz", b.cfg.Timezone).Msg("scheduler started")
+
 	for {
 		select {
 		case <-ctx.Done():
+			l.Debug().Msg("scheduler stopped")
 			return
 		case <-ticker.C:
 			now := time.Now().In(b.loc)
@@ -391,7 +410,7 @@ func (b *Bot) dailyScheduler(ctx context.Context) {
 
 			lastCheckin, err := b.store.GetLastCheckin(ctx, b.cfg.AllowedUserID)
 			if err != nil {
-				log.Printf("get last checkin: %v", err)
+				l.Error().Err(err).Msg("get last checkin failed")
 				continue
 			}
 
@@ -402,7 +421,7 @@ func (b *Bot) dailyScheduler(ctx context.Context) {
 
 			st, err := b.store.EnsureState(ctx, b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 			if err != nil {
-				log.Printf("ensure state: %v", err)
+				l.Error().Err(err).Msg("ensure state failed")
 				continue
 			}
 
@@ -413,9 +432,10 @@ func (b *Bot) dailyScheduler(ctx context.Context) {
 
 			msg := lang.Getf(st.Language, "checkin_msg", dayNum)
 			b.send(b.cfg.AllowedUserID, msg)
+			l.Info().Int("day", dayNum).Msg("daily check-in sent")
 
 			if err := b.store.MarkCheckin(ctx, b.cfg.AllowedUserID); err != nil {
-				log.Printf("mark checkin: %v", err)
+				l.Error().Err(err).Msg("mark checkin failed")
 			}
 		}
 	}
@@ -427,7 +447,7 @@ func (b *Bot) send(chatID int64, text string) {
 	if _, err := b.api.Send(msg); err != nil {
 		msg.ParseMode = ""
 		if _, err2 := b.api.Send(msg); err2 != nil {
-			log.Printf("send message: %v", err2)
+			logger.Error().Err(err2).Int64("chat_id", chatID).Msg("send message failed")
 		}
 	}
 }

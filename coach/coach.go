@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"maxxx-agency/log"
 )
 
 const (
@@ -15,6 +17,8 @@ const (
 	apiMaxRetries       = 3
 	apiRetryBackoffBase = 2
 )
+
+var logger = log.Logger.With().Str("component", "coach").Logger()
 
 type Coach struct {
 	apiKey string
@@ -85,6 +89,7 @@ func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[str
 	var lastErr error
 	for attempt := 0; attempt < apiMaxRetries; attempt++ {
 		if attempt > 0 {
+			logger.Warn().Int("attempt", attempt).Err(lastErr).Msg("retrying chat request")
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -104,6 +109,7 @@ func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[str
 		return resp, nil
 	}
 
+	logger.Error().Int("attempts", apiMaxRetries).Err(lastErr).Msg("chat request failed after retries")
 	return "", fmt.Errorf("chat failed after retries: %w", lastErr)
 }
 
