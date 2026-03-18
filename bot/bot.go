@@ -6,7 +6,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -33,7 +32,6 @@ type Bot struct {
 	cfg        Config
 	compendium string
 	loc        *time.Location
-	mu         sync.Mutex
 }
 
 func New(token string, c *coach.Coach, s *store.Store, cfg Config, compendium string) (*Bot, error) {
@@ -105,6 +103,7 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 	st, err := b.store.EnsureState(b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 	if err != nil {
 		log.Printf("ensure state: %v", err)
+		b.send(chatID, "Something went wrong. Please try again.")
 		return
 	}
 
@@ -124,6 +123,7 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		count, err := b.store.AddRejection(b.cfg.AllowedUserID)
 		if err != nil {
 			log.Printf("add rejection: %v", err)
+			b.send(chatID, "Could not log rejection. Please try again.")
 			return
 		}
 		response = lang.Getf(st.Language, "rejection_logged", count)
@@ -134,6 +134,8 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 	case "/skip":
 		if err := b.store.MarkCheckin(b.cfg.AllowedUserID); err != nil {
 			log.Printf("mark checkin: %v", err)
+			b.send(chatID, "Could not skip check-in. Please try again.")
+			return
 		}
 		response = lang.Get(st.Language, "checkin_skipped")
 
@@ -146,6 +148,8 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 	case "/reset":
 		if err := b.store.SetConversationHistory(b.cfg.AllowedUserID, []map[string]string{}); err != nil {
 			log.Printf("reset history: %v", err)
+			b.send(chatID, "Could not reset context. Please try again.")
+			return
 		}
 		response = "Conversation context cleared."
 
@@ -172,9 +176,14 @@ func (b *Bot) buildHelp(l string) string {
 }
 
 func (b *Bot) buildStatus(st *store.State) string {
-	goals, _ := b.store.GetGoals(b.cfg.AllowedUserID)
+	goals, err := b.store.GetGoals(b.cfg.AllowedUserID)
+	if err != nil {
+		log.Printf("get goals: %v", err)
+		goals = []string{}
+	}
+
 	var rejections []string
-	if err := jsonUnmarshal(st.RejectionLog, &rejections); err != nil {
+	if err := json.Unmarshal([]byte(st.RejectionLog), &rejections); err != nil {
 		rejections = []string{}
 	}
 
@@ -213,6 +222,7 @@ func (b *Bot) handleGoal(parts []string, st *store.State) string {
 	case "list":
 		goals, err := b.store.GetGoals(b.cfg.AllowedUserID)
 		if err != nil {
+			log.Printf("list goals: %v", err)
 			return "Error listing goals."
 		}
 		if len(goals) == 0 {
@@ -233,12 +243,17 @@ func (b *Bot) handleGoal(parts []string, st *store.State) string {
 		if err != nil {
 			return lang.Get(st.Language, "goal_invalid")
 		}
-		goals, _ := b.store.GetGoals(b.cfg.AllowedUserID)
+		goals, err := b.store.GetGoals(b.cfg.AllowedUserID)
+		if err != nil {
+			log.Printf("get goals for done: %v", err)
+			return "Error completing goal."
+		}
 		if idx < 1 || idx > len(goals) {
 			return lang.Get(st.Language, "goal_invalid")
 		}
 		goalName := goals[idx-1]
 		if err := b.store.CompleteGoal(b.cfg.AllowedUserID, idx-1); err != nil {
+			log.Printf("complete goal: %v", err)
 			return "Error completing goal."
 		}
 		return lang.Getf(st.Language, "goal_completed", goalName)
@@ -288,12 +303,20 @@ func (b *Bot) handleChat(chatID int64, text string) {
 	st, err := b.store.EnsureState(b.cfg.AllowedUserID, b.cfg.Language, b.cfg.Tone)
 	if err != nil {
 		log.Printf("ensure state: %v", err)
+		b.send(chatID, "Something went wrong. Please try again.")
 		return
 	}
 
-	goals, _ := b.store.GetGoals(b.cfg.AllowedUserID)
+	goals, err := b.store.GetGoals(b.cfg.AllowedUserID)
+	if err != nil {
+		log.Printf("get goals: %v", err)
+		goals = []string{}
+	}
+
 	var rejections []string
-	jsonUnmarshal(st.RejectionLog, &rejections)
+	if err := json.Unmarshal([]byte(st.RejectionLog), &rejections); err != nil {
+		rejections = []string{}
+	}
 
 	systemPrompt := coach.BuildSystemPrompt(
 		b.compendium,
@@ -304,7 +327,11 @@ func (b *Bot) handleChat(chatID int64, text string) {
 		rejections,
 	)
 
-	history, _ := b.store.GetConversationHistory(b.cfg.AllowedUserID)
+	history, err := b.store.GetConversationHistory(b.cfg.AllowedUserID)
+	if err != nil {
+		log.Printf("get history: %v", err)
+		history = []map[string]string{}
+	}
 
 	response, err := b.coach.Chat(systemPrompt, history, text)
 	if err != nil {
@@ -313,16 +340,17 @@ func (b *Bot) handleChat(chatID int64, text string) {
 		return
 	}
 
-	// Update history
 	history = append(history, map[string]string{"role": "user", "content": text})
 	history = append(history, map[string]string{"role": "assistant", "content": response})
 
-	// Cap at 20 messages
 	if len(history) > 20 {
 		history = history[len(history)-20:]
 	}
 
-	b.store.SetConversationHistory(b.cfg.AllowedUserID, history)
+	if err := b.store.SetConversationHistory(b.cfg.AllowedUserID, history); err != nil {
+		log.Printf("save history: %v", err)
+	}
+
 	b.send(chatID, response)
 }
 
@@ -364,7 +392,10 @@ func (b *Bot) dailyScheduler(stop <-chan struct{}) {
 
 			msg := lang.Getf(st.Language, "checkin_msg", dayNum)
 			b.send(b.cfg.AllowedUserID, msg)
-			b.store.MarkCheckin(b.cfg.AllowedUserID)
+
+			if err := b.store.MarkCheckin(b.cfg.AllowedUserID); err != nil {
+				log.Printf("mark checkin: %v", err)
+			}
 		}
 	}
 }
@@ -373,14 +404,9 @@ func (b *Bot) send(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "Markdown"
 	if _, err := b.api.Send(msg); err != nil {
-		// Retry without markdown
 		msg.ParseMode = ""
 		if _, err2 := b.api.Send(msg); err2 != nil {
 			log.Printf("send message: %v", err2)
 		}
 	}
-}
-
-func jsonUnmarshal(data string, v interface{}) error {
-	return json.Unmarshal([]byte(data), v)
 }
