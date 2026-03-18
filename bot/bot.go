@@ -16,8 +16,11 @@ import (
 )
 
 const (
-	maxGoalLen    = 777
-	maxMessageLen = 4000
+	maxGoalLen          = 777
+	maxMessageLen       = 4000
+	maxHistoryLen       = 20
+	telegramPollTimeout = 60
+	schedulerTickMin    = 1
 )
 
 type Config struct {
@@ -65,7 +68,7 @@ func New(token string, c *coach.Coach, s *store.Store, cfg Config, compendium st
 
 func (b *Bot) Run(stop <-chan struct{}) {
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = telegramPollTimeout
 
 	updates := b.api.GetUpdatesChan(u)
 
@@ -357,8 +360,8 @@ func (b *Bot) handleChat(chatID int64, text string) {
 	history = append(history, map[string]string{"role": "user", "content": text})
 	history = append(history, map[string]string{"role": "assistant", "content": response})
 
-	if len(history) > 20 {
-		history = history[len(history)-20:]
+	if len(history) > maxHistoryLen {
+		history = history[len(history)-maxHistoryLen:]
 	}
 
 	if err := b.store.SetConversationHistory(b.cfg.AllowedUserID, history); err != nil {
@@ -369,7 +372,7 @@ func (b *Bot) handleChat(chatID int64, text string) {
 }
 
 func (b *Bot) dailyScheduler(stop <-chan struct{}) {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(time.Duration(schedulerTickMin) * time.Minute)
 	defer ticker.Stop()
 
 	for {

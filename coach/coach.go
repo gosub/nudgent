@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+const (
+	apiTimeoutSeconds   = 60
+	apiMaxRetries       = 3
+	apiRetryBackoffBase = 2
+)
+
 type Coach struct {
 	apiKey string
 	model  string
@@ -19,7 +25,7 @@ func New(apiKey, model string) *Coach {
 	return &Coach{
 		apiKey: apiKey,
 		model:  model,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{Timeout: apiTimeoutSeconds * time.Second},
 	}
 }
 
@@ -76,9 +82,9 @@ func (c *Coach) Chat(systemPrompt string, history []map[string]string, userMessa
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < apiMaxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			time.Sleep(time.Duration(attempt) * apiRetryBackoffBase * time.Second)
 		}
 
 		resp, err := c.doRequest(body)
