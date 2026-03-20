@@ -1,0 +1,81 @@
+package agent
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/gosub/nudgent/store"
+)
+
+func BuildChatPrompt(language, schedule string, tasks []*store.Task, now time.Time) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are Nudgent, an intelligent task and nudge assistant.\n")
+	sb.WriteString("You help the user track tasks, remember commitments, and get things done.\n")
+	sb.WriteString("Be concise and direct.\n")
+	sb.WriteString(fmt.Sprintf("Always respond in %s.\n\n", langName(language)))
+
+	sb.WriteString(fmt.Sprintf("Current time: %s\n\n", now.Format("2006-01-02T15:04:05 (Monday)")))
+
+	if schedule != "" {
+		sb.WriteString(fmt.Sprintf("User's schedule: %s\n\n", schedule))
+	} else {
+		sb.WriteString("User's schedule: not set\n\n")
+	}
+
+	if len(tasks) == 0 {
+		sb.WriteString("Active tasks: none\n\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("Active tasks (%d):\n", len(tasks)))
+		for _, t := range tasks {
+			nudge := "not set"
+			if t.NextNudgeAt != "" {
+				nudge = t.NextNudgeAt
+			}
+			sb.WriteString(fmt.Sprintf("  %d. %s — next nudge: %s\n", t.ID, t.Description, nudge))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Respond ONLY with a JSON object: {\"reply\": \"...\", \"actions\": [...]}\n")
+	sb.WriteString("No text outside the JSON. If no actions are needed, use \"actions\": [].\n")
+	sb.WriteString("When setting next_nudge_at, use ISO 8601 and respect the user's schedule.\n")
+
+	return sb.String()
+}
+
+func BuildNudgePrompt(language, schedule string, tasks []*store.Task, now time.Time) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are Nudgent, a nudge agent.\n")
+	sb.WriteString(fmt.Sprintf("Current time: %s\n", now.Format("2006-01-02T15:04:05 (Monday)")))
+	if schedule != "" {
+		sb.WriteString(fmt.Sprintf("User's schedule: %s\n\n", schedule))
+	}
+	sb.WriteString(fmt.Sprintf("Always respond in %s.\n\n", langName(language)))
+
+	sb.WriteString("The following tasks are due for a nudge:\n")
+	for _, t := range tasks {
+		sb.WriteString(fmt.Sprintf("  %d. %s\n", t.ID, t.Description))
+	}
+
+	sb.WriteString("\nSend the user a short nudge. One task, one sentence, no fluff.\n")
+	sb.WriteString("If multiple tasks are due, pick the most urgent one.\n")
+	sb.WriteString("Use actions to update next_nudge_at for recurrent tasks after nudging.\n")
+	sb.WriteString("If no nudge is appropriate right now, return empty reply.\n\n")
+	sb.WriteString("Respond: {\"reply\": \"...\", \"actions\": [...]}\n")
+
+	return sb.String()
+}
+
+func langName(code string) string {
+	switch code {
+	case "it":
+		return "Italian"
+	case "en":
+		return "English"
+	default:
+		return "English"
+	}
+}

@@ -1,4 +1,4 @@
-package coach
+package agent
 
 import (
 	"bytes"
@@ -18,22 +18,22 @@ const (
 	apiRetryBackoffBase = 2
 )
 
-var logger = log.Logger.With().Str("component", "coach").Logger()
+var logger = log.Logger.With().Str("component", "agent").Logger()
 
-type Coach struct {
+type Agent struct {
 	apiKey string
 	model  string
 	client *http.Client
 }
 
-type Coacher interface {
-	Chat(ctx context.Context, systemPrompt string, history []map[string]string, userMessage string) (string, error)
+type Agenter interface {
+	Chat(ctx context.Context, systemPrompt string, userMessage string) (string, error)
 }
 
-var _ Coacher = (*Coach)(nil)
+var _ Agenter = (*Agent)(nil)
 
-func New(apiKey, model string) *Coach {
-	return &Coach{
+func New(apiKey, model string) *Agent {
+	return &Agent{
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: apiTimeoutSeconds * time.Second},
@@ -61,33 +61,13 @@ type chatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[string]string, userMessage string) (string, error) {
+func (a *Agent) Chat(ctx context.Context, systemPrompt string, userMessage string) (string, error) {
 	messages := []chatMessage{
 		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userMessage},
 	}
 
-	for _, h := range history {
-		role := h["role"]
-		if role != "user" && role != "assistant" {
-			role = "user"
-		}
-		messages = append(messages, chatMessage{
-			Role:    role,
-			Content: h["content"],
-		})
-	}
-
-	messages = append(messages, chatMessage{
-		Role:    "user",
-		Content: userMessage,
-	})
-
-	reqBody := chatRequest{
-		Model:    c.model,
-		Messages: messages,
-	}
-
-	body, err := json.Marshal(reqBody)
+	body, err := json.Marshal(chatRequest{Model: a.model, Messages: messages})
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
@@ -95,7 +75,7 @@ func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[str
 	var lastErr error
 	for attempt := 0; attempt < apiMaxRetries; attempt++ {
 		if attempt > 0 {
-			logger.Warn().Int("attempt", attempt).Err(lastErr).Msg("retrying chat request")
+			logger.Warn().Int("attempt", attempt).Err(lastErr).Msg("retrying request")
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -103,7 +83,7 @@ func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[str
 			}
 		}
 
-		resp, err := c.doRequest(ctx, body)
+		resp, err := a.doRequest(ctx, body)
 		if err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
@@ -111,24 +91,22 @@ func (c *Coach) Chat(ctx context.Context, systemPrompt string, history []map[str
 			}
 			continue
 		}
-
 		return resp, nil
 	}
 
-	logger.Error().Int("attempts", apiMaxRetries).Err(lastErr).Msg("chat request failed after retries")
-	return "", fmt.Errorf("chat failed after retries: %w", lastErr)
+	logger.Error().Int("attempts", apiMaxRetries).Err(lastErr).Msg("request failed after retries")
+	return "", fmt.Errorf("request failed after retries: %w", lastErr)
 }
 
-func (c *Coach) doRequest(ctx context.Context, body []byte) (string, error) {
+func (a *Agent) doRequest(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 
-	resp, err := c.client.Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("send request: %w", err)
 	}
@@ -147,14 +125,11 @@ func (c *Coach) doRequest(ctx context.Context, body []byte) (string, error) {
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
-
 	if chatResp.Error != nil {
 		return "", fmt.Errorf("API error: %s", chatResp.Error.Message)
 	}
-
 	if len(chatResp.Choices) == 0 {
 		return "", fmt.Errorf("no choices in response")
 	}
-
 	return chatResp.Choices[0].Message.Content, nil
 }

@@ -11,8 +11,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/joho/godotenv"
 
+	"github.com/gosub/nudgent/agent"
 	"github.com/gosub/nudgent/bot"
-	"github.com/gosub/nudgent/coach"
 	"github.com/gosub/nudgent/log"
 	"github.com/gosub/nudgent/store"
 )
@@ -21,12 +21,10 @@ type Config struct {
 	TelegramTokenEnv string `toml:"telegram_token_env"`
 	OpenRouterKeyEnv string `toml:"openrouter_key_env"`
 	AllowedUserIDEnv string `toml:"allowed_user_id_env"`
-	DailyCheckinHour int    `toml:"daily_checkin_hour"`
 	Timezone         string `toml:"timezone"`
 	Model            string `toml:"model"`
 	Language         string `toml:"language"`
-	Tone             string `toml:"tone"`
-	BotName          string `toml:"bot_name"`
+	NudgeIntervalM   int    `toml:"nudge_interval_m"`
 }
 
 func main() {
@@ -58,58 +56,40 @@ func main() {
 		logger.Fatal().Str("var", cfg.AllowedUserIDEnv).Msg("missing env var")
 	}
 	allowedUserID, err := strconv.ParseInt(allowedUserIDStr, 10, 64)
-	if err != nil {
+	if err != nil || allowedUserID == 0 {
 		logger.Fatal().Err(err).Msg("invalid ALLOWED_USER_ID")
 	}
-	if allowedUserID == 0 {
-		logger.Fatal().Msg("ALLOWED_USER_ID must be non-zero")
+
+	if cfg.NudgeIntervalM <= 0 {
+		cfg.NudgeIntervalM = 30
 	}
 
-	if cfg.DailyCheckinHour < 0 || cfg.DailyCheckinHour > 23 {
-		logger.Fatal().Int("hour", cfg.DailyCheckinHour).Msg("daily_checkin_hour must be 0-23")
-	}
-
-	validTones := map[string]bool{"warm": true, "direct": true, "drill-sergeant": true}
-	if !validTones[cfg.Tone] {
-		logger.Fatal().Str("tone", cfg.Tone).Msg("invalid tone")
-	}
-
-	compendium, err := os.ReadFile("AGENCY-COMPENDIUM.md")
-	if err != nil {
-		logger.Fatal().Err(err).Msg("failed to read AGENCY-COMPENDIUM.md")
-	}
-
-	s, err := store.New("agency.db")
+	s, err := store.New("nudgent.db")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to init store")
 	}
 	defer s.Close()
 
-	if _, err = s.EnsureState(context.Background(), allowedUserID, cfg.Language, cfg.Tone); err != nil {
-		logger.Fatal().Err(err).Msg("failed to ensure state")
+	if _, err := s.EnsurePrefs(context.Background(), allowedUserID, cfg.Language, cfg.NudgeIntervalM); err != nil {
+		logger.Fatal().Err(err).Msg("failed to ensure prefs")
 	}
 
-	c := coach.New(openrouterKey, cfg.Model)
+	a := agent.New(openrouterKey, cfg.Model)
 
-	b, err := bot.New(telegramToken, c, s, bot.Config{
-		AllowedUserID:    allowedUserID,
-		DailyCheckinHour: cfg.DailyCheckinHour,
-		Timezone:         cfg.Timezone,
-		Model:            cfg.Model,
-		Language:         cfg.Language,
-		Tone:             cfg.Tone,
-		BotName:          cfg.BotName,
-	}, string(compendium))
+	b, err := bot.New(telegramToken, a, s, bot.Config{
+		AllowedUserID:  allowedUserID,
+		NudgeIntervalM: cfg.NudgeIntervalM,
+		Timezone:       cfg.Timezone,
+		Language:       cfg.Language,
+	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to init bot")
 	}
 
 	logger.Info().
-		Str("bot", cfg.BotName).
 		Int64("user_id", allowedUserID).
 		Str("lang", cfg.Language).
-		Str("tone", cfg.Tone).
-		Int("checkin_hour", cfg.DailyCheckinHour).
+		Int("nudge_interval_m", cfg.NudgeIntervalM).
 		Str("timezone", cfg.Timezone).
 		Str("model", cfg.Model).
 		Msg("starting")
@@ -125,10 +105,5 @@ func main() {
 
 	logger.Info().Str("signal", sig.String()).Msg("shutting down")
 	cancel()
-
-	if ce := logger.Trace(); ce.Enabled() {
-		// small delay to let context cancellation propagate
-		ce.Msg("shutdown complete")
-	}
 	fmt.Println("Goodbye!")
 }

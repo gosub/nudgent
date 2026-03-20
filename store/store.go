@@ -3,23 +3,25 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-type State struct {
-	UserID              int64  `json:"user_id"`
-	CurrentPhase        int    `json:"current_phase"`
-	CurrentGoals        string `json:"current_goals"`
-	RejectionLog        string `json:"rejection_log"`
-	LastCheckin         string `json:"last_checkin"`
-	ConversationHistory string `json:"conversation_history"`
-	ConfigNotes         string `json:"config_notes"`
-	Language            string `json:"language"`
-	Tone                string `json:"tone"`
+type Task struct {
+	ID           int64
+	UserID       int64
+	Description  string
+	NextNudgeAt  string // ISO 8601, empty if not set
+	Done         bool
+}
+
+type Prefs struct {
+	UserID         int64
+	Language       string
+	NudgeIntervalM int
+	Schedule       string // freeform, e.g. "weekdays 9-13 and 15-19"
+	LastWakeupAt   string // ISO 8601, empty if never run
 }
 
 type Store struct {
@@ -27,19 +29,21 @@ type Store struct {
 }
 
 type Storager interface {
-	EnsureState(ctx context.Context, userID int64, defaultLang, defaultTone string) (*State, error)
-	GetState(ctx context.Context, userID int64) (*State, error)
-	UpdateState(ctx context.Context, st *State) error
+	// Tasks
+	AddTask(ctx context.Context, userID int64, description string) (*Task, error)
+	GetTasks(ctx context.Context, userID int64) ([]*Task, error)
+	UpdateTask(ctx context.Context, id int64, description string) error
+	SetNextNudgeAt(ctx context.Context, id int64, nextNudgeAt string) error
+	CompleteTask(ctx context.Context, id int64) error
+	DeleteTask(ctx context.Context, id int64) error
+	GetDueTasks(ctx context.Context, userID int64, now string) ([]*Task, error)
+
+	// Prefs
+	EnsurePrefs(ctx context.Context, userID int64, defaultLang string, defaultInterval int) (*Prefs, error)
+	GetPrefs(ctx context.Context, userID int64) (*Prefs, error)
 	SetLanguage(ctx context.Context, userID int64, lang string) error
-	SetTone(ctx context.Context, userID int64, tone string) error
-	AddRejection(ctx context.Context, userID int64) (int, error)
-	AddGoal(ctx context.Context, userID int64, goal string) error
-	GetGoals(ctx context.Context, userID int64) ([]string, error)
-	CompleteGoal(ctx context.Context, userID int64, index int) error
-	SetConversationHistory(ctx context.Context, userID int64, messages []map[string]string) error
-	GetConversationHistory(ctx context.Context, userID int64) ([]map[string]string, error)
-	MarkCheckin(ctx context.Context, userID int64) error
-	GetLastCheckin(ctx context.Context, userID int64) (string, error)
+	SetSchedule(ctx context.Context, userID int64, schedule string) error
+	SetLastWakeupAt(ctx context.Context, userID int64, t string) error
 }
 
 var _ Storager = (*Store)(nil)
@@ -55,16 +59,19 @@ func New(dbPath string) (*Store, error) {
 	}
 
 	schema := `
-	CREATE TABLE IF NOT EXISTS state (
-		user_id              INTEGER PRIMARY KEY,
-		current_phase        INTEGER DEFAULT 0,
-		current_goals        TEXT DEFAULT '[]',
-		rejection_log        TEXT DEFAULT '[]',
-		last_checkin         TEXT,
-		conversation_history TEXT DEFAULT '[]',
-		config_notes         TEXT DEFAULT '',
-		language             TEXT DEFAULT 'it',
-		tone                 TEXT DEFAULT 'warm'
+	CREATE TABLE IF NOT EXISTS tasks (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id       INTEGER NOT NULL,
+		description   TEXT    NOT NULL,
+		next_nudge_at TEXT,
+		done          INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE IF NOT EXISTS prefs (
+		user_id          INTEGER PRIMARY KEY,
+		language         TEXT    NOT NULL DEFAULT 'en',
+		nudge_interval_m INTEGER NOT NULL DEFAULT 30,
+		schedule         TEXT    NOT NULL DEFAULT '',
+		last_wakeup_at   TEXT
 	);`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -78,207 +85,141 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) GetState(ctx context.Context, userID int64) (*State, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT user_id, current_phase, current_goals, rejection_log,
-		       last_checkin, conversation_history, config_notes, language, tone
-		FROM state WHERE user_id = ?`, userID)
+// --- Tasks ---
 
-	st := &State{}
-	var lastCheckin sql.NullString
-	err := row.Scan(&st.UserID, &st.CurrentPhase, &st.CurrentGoals,
-		&st.RejectionLog, &lastCheckin, &st.ConversationHistory,
-		&st.ConfigNotes, &st.Language, &st.Tone)
+func (s *Store) AddTask(ctx context.Context, userID int64, description string) (*Task, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO tasks (user_id, description) VALUES (?, ?)`,
+		userID, description)
+	if err != nil {
+		return nil, fmt.Errorf("insert task: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+	return &Task{ID: id, UserID: userID, Description: description}, nil
+}
+
+func (s *Store) GetTasks(ctx context.Context, userID int64) ([]*Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, description, next_nudge_at, done
+		 FROM tasks WHERE user_id = ? AND done = 0
+		 ORDER BY id ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func (s *Store) GetDueTasks(ctx context.Context, userID int64, now string) ([]*Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, description, next_nudge_at, done
+		 FROM tasks WHERE user_id = ? AND done = 0 AND next_nudge_at <= ?
+		 ORDER BY next_nudge_at ASC`, userID, now)
+	if err != nil {
+		return nil, fmt.Errorf("query due tasks: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func (s *Store) UpdateTask(ctx context.Context, id int64, description string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET description = ? WHERE id = ?`, description, id)
+	return err
+}
+
+func (s *Store) SetNextNudgeAt(ctx context.Context, id int64, nextNudgeAt string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET next_nudge_at = ? WHERE id = ?`, nextNudgeAt, id)
+	return err
+}
+
+func (s *Store) CompleteTask(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET done = 1 WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) DeleteTask(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM tasks WHERE id = ?`, id)
+	return err
+}
+
+func scanTasks(rows *sql.Rows) ([]*Task, error) {
+	var tasks []*Task
+	for rows.Next() {
+		t := &Task{}
+		var nextNudgeAt sql.NullString
+		var done int
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Description, &nextNudgeAt, &done); err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+		if nextNudgeAt.Valid {
+			t.NextNudgeAt = nextNudgeAt.String
+		}
+		t.Done = done != 0
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// --- Prefs ---
+
+func (s *Store) EnsurePrefs(ctx context.Context, userID int64, defaultLang string, defaultInterval int) (*Prefs, error) {
+	p, err := s.GetPrefs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		return p, nil
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO prefs (user_id, language, nudge_interval_m) VALUES (?, ?, ?)`,
+		userID, defaultLang, defaultInterval)
+	if err != nil {
+		return nil, fmt.Errorf("insert prefs: %w", err)
+	}
+	return &Prefs{UserID: userID, Language: defaultLang, NudgeIntervalM: defaultInterval}, nil
+}
+
+func (s *Store) GetPrefs(ctx context.Context, userID int64) (*Prefs, error) {
+	p := &Prefs{}
+	var lastWakeupAt sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT user_id, language, nudge_interval_m, schedule, last_wakeup_at
+		 FROM prefs WHERE user_id = ?`, userID).
+		Scan(&p.UserID, &p.Language, &p.NudgeIntervalM, &p.Schedule, &lastWakeupAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("scan state: %w", err)
+		return nil, fmt.Errorf("scan prefs: %w", err)
 	}
-	if lastCheckin.Valid {
-		st.LastCheckin = lastCheckin.String
+	if lastWakeupAt.Valid {
+		p.LastWakeupAt = lastWakeupAt.String
 	}
-	return st, nil
-}
-
-func (s *Store) EnsureState(ctx context.Context, userID int64, defaultLang, defaultTone string) (*State, error) {
-	st, err := s.GetState(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if st != nil {
-		return st, nil
-	}
-
-	st = &State{
-		UserID:              userID,
-		CurrentPhase:        0,
-		CurrentGoals:        "[]",
-		RejectionLog:        "[]",
-		ConversationHistory: "[]",
-		ConfigNotes:         "",
-		Language:            defaultLang,
-		Tone:                defaultTone,
-	}
-
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO state (user_id, current_phase, current_goals, rejection_log,
-		                   conversation_history, config_notes, language, tone)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		st.UserID, st.CurrentPhase, st.CurrentGoals, st.RejectionLog,
-		st.ConversationHistory, st.ConfigNotes, st.Language, st.Tone)
-	if err != nil {
-		return nil, fmt.Errorf("insert state: %w", err)
-	}
-	return st, nil
-}
-
-func (s *Store) UpdateState(ctx context.Context, st *State) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE state SET
-			current_phase = ?,
-			current_goals = ?,
-			rejection_log = ?,
-			last_checkin = ?,
-			conversation_history = ?,
-			config_notes = ?,
-			language = ?,
-			tone = ?
-		WHERE user_id = ?`,
-		st.CurrentPhase, st.CurrentGoals, st.RejectionLog,
-		st.LastCheckin, st.ConversationHistory, st.ConfigNotes,
-		st.Language, st.Tone, st.UserID)
-	return err
+	return p, nil
 }
 
 func (s *Store) SetLanguage(ctx context.Context, userID int64, lang string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE state SET language = ? WHERE user_id = ?`, lang, userID)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE prefs SET language = ? WHERE user_id = ?`, lang, userID)
 	return err
 }
 
-func (s *Store) SetTone(ctx context.Context, userID int64, tone string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE state SET tone = ? WHERE user_id = ?`, tone, userID)
+func (s *Store) SetSchedule(ctx context.Context, userID int64, schedule string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE prefs SET schedule = ? WHERE user_id = ?`, schedule, userID)
 	return err
 }
 
-func (s *Store) AddRejection(ctx context.Context, userID int64) (int, error) {
-	st, err := s.EnsureState(ctx, userID, "it", "warm")
-	if err != nil {
-		return 0, err
-	}
-
-	var rejections []string
-	if err := json.Unmarshal([]byte(st.RejectionLog), &rejections); err != nil {
-		rejections = []string{}
-	}
-	rejections = append(rejections, time.Now().Format("2006-01-02"))
-
-	data, err := json.Marshal(rejections)
-	if err != nil {
-		return 0, err
-	}
-
-	_, err = s.db.ExecContext(ctx, `UPDATE state SET rejection_log = ? WHERE user_id = ?`, string(data), userID)
-	if err != nil {
-		return 0, err
-	}
-	return len(rejections), nil
-}
-
-func (s *Store) AddGoal(ctx context.Context, userID int64, goal string) error {
-	st, err := s.EnsureState(ctx, userID, "it", "warm")
-	if err != nil {
-		return err
-	}
-
-	var goals []string
-	if err := json.Unmarshal([]byte(st.CurrentGoals), &goals); err != nil {
-		goals = []string{}
-	}
-	goals = append(goals, goal)
-
-	data, err := json.Marshal(goals)
-	if err != nil {
-		return err
-	}
-
-	_, err = s.db.ExecContext(ctx, `UPDATE state SET current_goals = ? WHERE user_id = ?`, string(data), userID)
+func (s *Store) SetLastWakeupAt(ctx context.Context, userID int64, t string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE prefs SET last_wakeup_at = ? WHERE user_id = ?`, t, userID)
 	return err
-}
-
-func (s *Store) GetGoals(ctx context.Context, userID int64) ([]string, error) {
-	st, err := s.EnsureState(ctx, userID, "it", "warm")
-	if err != nil {
-		return nil, err
-	}
-	var goals []string
-	if err := json.Unmarshal([]byte(st.CurrentGoals), &goals); err != nil {
-		return []string{}, nil
-	}
-	return goals, nil
-}
-
-func (s *Store) CompleteGoal(ctx context.Context, userID int64, index int) error {
-	goals, err := s.GetGoals(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if index < 0 || index >= len(goals) {
-		return fmt.Errorf("invalid goal index")
-	}
-	goals = append(goals[:index], goals[index+1:]...)
-	data, err := json.Marshal(goals)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE state SET current_goals = ? WHERE user_id = ?`, string(data), userID)
-	return err
-}
-
-func (s *Store) SetConversationHistory(ctx context.Context, userID int64, messages []map[string]string) error {
-	if _, err := s.EnsureState(ctx, userID, "it", "warm"); err != nil {
-		return err
-	}
-	data, err := json.Marshal(messages)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE state SET conversation_history = ? WHERE user_id = ?`, string(data), userID)
-	return err
-}
-
-func (s *Store) GetConversationHistory(ctx context.Context, userID int64) ([]map[string]string, error) {
-	st, err := s.EnsureState(ctx, userID, "it", "warm")
-	if err != nil {
-		return nil, err
-	}
-	var msgs []map[string]string
-	if err := json.Unmarshal([]byte(st.ConversationHistory), &msgs); err != nil {
-		return []map[string]string{}, nil
-	}
-	return msgs, nil
-}
-
-func (s *Store) MarkCheckin(ctx context.Context, userID int64) error {
-	if _, err := s.EnsureState(ctx, userID, "it", "warm"); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `UPDATE state SET last_checkin = ? WHERE user_id = ?`,
-		time.Now().Format("2006-01-02"), userID)
-	return err
-}
-
-func (s *Store) GetLastCheckin(ctx context.Context, userID int64) (string, error) {
-	var lastCheckin sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT last_checkin FROM state WHERE user_id = ?`, userID).Scan(&lastCheckin)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	if lastCheckin.Valid {
-		return lastCheckin.String, nil
-	}
-	return "", nil
 }
