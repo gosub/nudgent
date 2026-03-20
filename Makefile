@@ -1,7 +1,7 @@
 .PHONY: build clean run fmt vet tidy lint test help
 
 BINARY := nudgent
-DB     := agency.db
+DB     := nudgent.db
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
