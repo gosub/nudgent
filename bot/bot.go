@@ -93,13 +93,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 
 	if len(text) > maxMessageLen {
-		p, _ := b.store.GetPrefs(ctx, b.cfg.AllowedUserID)
-		l := "en"
-		if p != nil {
-			l = p.Language
-		}
-		b.send(chatID, "Message too long (max "+fmt.Sprint(maxMessageLen)+" characters).")
-		_ = l
+		b.send(chatID, fmt.Sprintf("Message too long (max %d characters).", maxMessageLen))
 		return
 	}
 
