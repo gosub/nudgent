@@ -39,8 +39,15 @@ func BuildChatPrompt(language, schedule string, tasks []*store.Task, now time.Ti
 	}
 
 	sb.WriteString("Respond ONLY with a JSON object: {\"reply\": \"...\", \"actions\": [...]}\n")
-	sb.WriteString("No text outside the JSON. If no actions are needed, use \"actions\": [].\n")
-	sb.WriteString("When setting next_nudge_at, use ISO 8601 and respect the user's schedule.\n")
+	sb.WriteString("No text outside the JSON. If no actions are needed, use \"actions\": [].\n\n")
+	sb.WriteString("Available actions:\n")
+	sb.WriteString("  {\"type\": \"add_task\",        \"description\": \"...\", \"next_nudge_at\": \"ISO8601\"}  — next_nudge_at optional\n")
+	sb.WriteString("  {\"type\": \"update_task\",     \"id\": N, \"description\": \"...\", \"next_nudge_at\": \"ISO8601\"}  — both fields optional\n")
+	sb.WriteString("  {\"type\": \"complete_task\",   \"id\": N}\n")
+	sb.WriteString("  {\"type\": \"delete_task\",     \"id\": N}\n")
+	sb.WriteString("  {\"type\": \"update_schedule\", \"schedule\": \"...\"}\n")
+	sb.WriteString("Always use numeric id from the task list. When adding a task with a known time, always include next_nudge_at.\n")
+	sb.WriteString("next_nudge_at must be ISO 8601 (e.g. 2026-03-21T09:00:00). Respect the user's schedule.\n")
 
 	return sb.String()
 }

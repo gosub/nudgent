@@ -8,6 +8,7 @@ import (
 
 	"github.com/gosub/nudgent/agent"
 	"github.com/gosub/nudgent/lang"
+	"github.com/gosub/nudgent/store"
 )
 
 func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
@@ -151,9 +152,18 @@ func (b *Bot) executeActions(ctx context.Context, actions []agent.Action) error 
 		var err error
 		switch a.Type {
 		case agent.ActionAddTask:
-			_, err = b.store.AddTask(ctx, b.cfg.AllowedUserID, a.Description)
+			var t *store.Task
+			t, err = b.store.AddTask(ctx, b.cfg.AllowedUserID, a.Description)
+			if err == nil && a.NextNudgeAt != "" {
+				err = b.store.SetNextNudgeAt(ctx, t.ID, a.NextNudgeAt)
+			}
 		case agent.ActionUpdateTask:
-			err = b.store.UpdateTask(ctx, a.ID, a.Description)
+			if a.Description != "" {
+				err = b.store.UpdateTask(ctx, a.ID, a.Description)
+			}
+			if err == nil && a.NextNudgeAt != "" {
+				err = b.store.SetNextNudgeAt(ctx, a.ID, a.NextNudgeAt)
+			}
 		case agent.ActionSetNextNudge:
 			err = b.store.SetNextNudgeAt(ctx, a.ID, a.NextNudgeAt)
 		case agent.ActionCompleteTask:
