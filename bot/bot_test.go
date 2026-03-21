@@ -151,7 +151,7 @@ func TestHandleCommandTasks_Empty(t *testing.T) {
 	if len(fb.messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(fb.messages))
 	}
-	if fb.messages[0] != "Nessun compito attivo." {
+	if fb.messages[0] != "No active tasks." {
 		t.Errorf("message = %q", fb.messages[0])
 	}
 }

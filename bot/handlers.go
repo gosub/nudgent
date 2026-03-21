@@ -20,7 +20,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 	case "/debug":
 		b.send(chatID, b.buildDebug(ctx))
 	case "/help":
-		b.send(chatID, "/tasks — lista compiti attivi\n/help — mostra questo messaggio\n\nOppure scrivi quello che ti serve.")
+		b.send(chatID, "/tasks — list active tasks\n/help — show this message\n\nOr just tell me what you need.")
 	default:
 		// unknown commands are silently ignored
 	}
@@ -30,14 +30,14 @@ func (b *Bot) buildTaskList(ctx context.Context) string {
 	tasks, err := b.store.GetTasks(ctx, b.cfg.AllowedUserID)
 	if err != nil {
 		b.log.Error().Err(err).Msg("get tasks failed")
-		return "Errore nel caricare i compiti."
+		return "Error loading tasks."
 	}
 	if len(tasks) == 0 {
-		return "Nessun compito attivo."
+		return "No active tasks."
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Compiti attivi:\n")
+	sb.WriteString("Active tasks:\n")
 	for i, t := range tasks {
 		nudge := ""
 		if t.NextNudgeAt != "" {
