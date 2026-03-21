@@ -22,22 +22,17 @@ Bot:    Rescheduled "Write report" to Thursday 09:00.
 Bot:    "Call dentist" is overdue — end of March is tomorrow.
 ```
 
-## Quick Start
-
-1. Clone the repo
+## Build
 
 ```
 git clone https://github.com/gosub/nudgent.git
 cd nudgent
+make build
 ```
 
-2. Copy the example env file and fill in your secrets
+Produces a single static binary: `./nudgent`.
 
-```
-cp .env.example .env
-```
-
-Edit `.env`:
+Copy `.env.example` to `.env` and fill in your secrets:
 
 ```
 TELEGRAM_TOKEN=your-telegram-bot-token
@@ -45,7 +40,7 @@ OPENROUTER_KEY=your-openrouter-api-key
 ALLOWED_USER_ID=your-telegram-numeric-id
 ```
 
-3. Adjust `config.toml` if needed
+Adjust `config.toml` as needed:
 
 ```toml
 timezone         = "Europe/Rome"
@@ -54,10 +49,9 @@ language         = "en"
 nudge_interval_m = 30
 ```
 
-4. Build and run
+Then run:
 
 ```
-make build
 ./nudgent
 ```
 
@@ -70,6 +64,27 @@ make build
 
 Everything else — adding tasks, marking done, rescheduling, setting your schedule — is plain chat.
 
+## Deployment
+
+To run on a server, copy three files and the binary:
+
+```
+nudgent          # compiled binary (make build)
+config.toml      # timezone, model, language, nudge interval
+.env             # secrets: TELEGRAM_TOKEN, OPENROUTER_KEY, ALLOWED_USER_ID
+nudgent.db       # created automatically on first run
+```
+
+To run as a systemd user service:
+
+```
+cp nudgent.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now nudgent
+```
+
+The service file expects the binary and config in `~/nudgent/`. Adjust `WorkingDirectory` and `ExecStart` in `nudgent.service` if you use a different path.
+
 ## Project Structure
 
 ```
@@ -77,8 +92,7 @@ nudgent/
 ├── main.go        # Entry point, config loading, wiring
 ├── bot/           # Telegram polling, command and chat handlers, nudge engine
 ├── agent/         # OpenRouter client, system prompt builder, action parser
-├── store/         # SQLite: tasks and prefs
-└── lang/          # Bilingual strings (en, it)
+└── store/         # SQLite: tasks and prefs
 ```
 
 ## Dependencies
