@@ -42,6 +42,7 @@ type Storager interface {
 	EnsurePrefs(ctx context.Context, userID int64, defaultLang string, defaultInterval int) (*Prefs, error)
 	GetPrefs(ctx context.Context, userID int64) (*Prefs, error)
 	SetLanguage(ctx context.Context, userID int64, lang string) error
+	SetNudgeInterval(ctx context.Context, userID int64, intervalM int) error
 	SetSchedule(ctx context.Context, userID int64, schedule string) error
 	SetLastWakeupAt(ctx context.Context, userID int64, t string) error
 }
@@ -209,6 +210,12 @@ func (s *Store) GetPrefs(ctx context.Context, userID int64) (*Prefs, error) {
 func (s *Store) SetLanguage(ctx context.Context, userID int64, lang string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE prefs SET language = ? WHERE user_id = ?`, lang, userID)
+	return err
+}
+
+func (s *Store) SetNudgeInterval(ctx context.Context, userID int64, intervalM int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE prefs SET nudge_interval_m = ? WHERE user_id = ?`, intervalM, userID)
 	return err
 }
 

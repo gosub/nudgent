@@ -3,5 +3,5 @@ openrouter_key_env  = "OPENROUTER_KEY"
 allowed_user_id_env = "ALLOWED_USER_ID"
 timezone            = "Europe/Rome"
 model               = "nvidia/nemotron-3-super-120b-a12b:free"
-language            = "en"
-nudge_interval_m    = 30
+language            = "it"
+nudge_interval_m    = 10

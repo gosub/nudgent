@@ -38,6 +38,9 @@ func (m *mockStore) EnsurePrefs(ctx context.Context, userID int64, lang string, 
 func (m *mockStore) GetPrefs(ctx context.Context, userID int64) (*store.Prefs, error) {
 	return m.prefs, nil
 }
+func (m *mockStore) SetNudgeInterval(ctx context.Context, userID int64, intervalM int) error {
+	return nil
+}
 func (m *mockStore) SetLanguage(ctx context.Context, userID int64, lang string) error {
 	if m.prefs != nil {
 		m.prefs.Language = lang

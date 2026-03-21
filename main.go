@@ -70,8 +70,15 @@ func main() {
 	}
 	defer s.Close()
 
-	if _, err := s.EnsurePrefs(context.Background(), allowedUserID, cfg.Language, cfg.NudgeIntervalM); err != nil {
+	ctx0 := context.Background()
+	if _, err := s.EnsurePrefs(ctx0, allowedUserID, cfg.Language, cfg.NudgeIntervalM); err != nil {
 		logger.Fatal().Err(err).Msg("failed to ensure prefs")
+	}
+	if err := s.SetLanguage(ctx0, allowedUserID, cfg.Language); err != nil {
+		logger.Fatal().Err(err).Msg("failed to sync language")
+	}
+	if err := s.SetNudgeInterval(ctx0, allowedUserID, cfg.NudgeIntervalM); err != nil {
+		logger.Fatal().Err(err).Msg("failed to sync nudge interval")
 	}
 
 	a := agent.New(openrouterKey, cfg.Model)
