@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gosub/nudgent/agent"
-	"github.com/gosub/nudgent/lang"
 	"github.com/gosub/nudgent/store"
 )
 
@@ -21,35 +20,24 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, text string) {
 	case "/debug":
 		b.send(chatID, b.buildDebug(ctx))
 	case "/help":
-		p, _ := b.store.GetPrefs(ctx, b.cfg.AllowedUserID)
-		l := "en"
-		if p != nil {
-			l = p.Language
-		}
-		b.send(chatID, lang.Get(l, "help"))
+		b.send(chatID, "/tasks — lista compiti attivi\n/help — mostra questo messaggio\n\nOppure scrivi quello che ti serve.")
 	default:
 		// unknown commands are silently ignored
 	}
 }
 
 func (b *Bot) buildTaskList(ctx context.Context) string {
-	p, _ := b.store.GetPrefs(ctx, b.cfg.AllowedUserID)
-	l := "en"
-	if p != nil {
-		l = p.Language
-	}
-
 	tasks, err := b.store.GetTasks(ctx, b.cfg.AllowedUserID)
 	if err != nil {
 		b.log.Error().Err(err).Msg("get tasks failed")
-		return "Error loading tasks."
+		return "Errore nel caricare i compiti."
 	}
 	if len(tasks) == 0 {
-		return lang.Get(l, "tasks_empty")
+		return "Nessun compito attivo."
 	}
 
 	var sb strings.Builder
-	sb.WriteString(lang.Get(l, "tasks_header") + "\n")
+	sb.WriteString("Compiti attivi:\n")
 	for i, t := range tasks {
 		nudge := ""
 		if t.NextNudgeAt != "" {
