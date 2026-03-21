@@ -40,7 +40,7 @@ func (b *Bot) buildTaskList(ctx context.Context) string {
 
 	tasks, err := b.store.GetTasks(ctx, b.cfg.AllowedUserID)
 	if err != nil {
-		logger.Error().Err(err).Msg("get tasks failed")
+		b.log.Error().Err(err).Msg("get tasks failed")
 		return "Error loading tasks."
 	}
 	if len(tasks) == 0 {
@@ -66,41 +66,41 @@ func (b *Bot) handleChat(ctx context.Context, chatID int64, text string) {
 
 	p, err := b.store.EnsurePrefs(ctx, b.cfg.AllowedUserID, b.cfg.Language, b.cfg.NudgeIntervalM)
 	if err != nil {
-		logger.Error().Err(err).Msg("ensure prefs failed")
+		b.log.Error().Err(err).Msg("ensure prefs failed")
 		b.send(chatID, "Something went wrong. Please try again.")
 		return
 	}
 
 	tasks, err := b.store.GetTasks(ctx, b.cfg.AllowedUserID)
 	if err != nil {
-		logger.Error().Err(err).Msg("get tasks failed")
+		b.log.Error().Err(err).Msg("get tasks failed")
 		tasks = nil
 	}
 
 	prompt := agent.BuildChatPrompt(p.Language, p.Schedule, tasks, time.Now().In(b.loc))
-	logger.Trace().Str("prompt", prompt).Msg("chat system prompt")
+	b.log.Trace().Str("prompt", prompt).Msg("chat system prompt")
 	raw, err := b.agent.Chat(ctx, prompt, text)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		logger.Error().Err(err).Msg("agent chat failed")
+		b.log.Error().Err(err).Msg("agent chat failed")
 		b.send(chatID, "Sorry, I couldn't process that. Try again.")
 		return
 	}
 
-	logger.Debug().Str("raw", raw).Msg("agent response")
+	b.log.Debug().Str("raw", raw).Msg("agent response")
 
 	resp, err := agent.ParseResponse(raw)
 	if err != nil {
-		logger.Warn().Err(err).Str("raw", raw).Msg("failed to parse agent response, sending raw")
+		b.log.Warn().Err(err).Str("raw", raw).Msg("failed to parse agent response, sending raw")
 		b.send(chatID, raw)
 		return
 	}
 
-	logger.Debug().Int("actions", len(resp.Actions)).Msg("executing actions")
+	b.log.Debug().Int("actions", len(resp.Actions)).Msg("executing actions")
 	if err := b.executeActions(ctx, resp.Actions); err != nil {
-		logger.Error().Err(err).Msg("execute actions failed")
+		b.log.Error().Err(err).Msg("execute actions failed")
 	}
 
 	if resp.Reply != "" {
@@ -147,7 +147,7 @@ func or(s, fallback string) string {
 
 func (b *Bot) executeActions(ctx context.Context, actions []agent.Action) error {
 	for _, a := range actions {
-		logger.Info().Str("type", string(a.Type)).Int64("id", a.ID).Str("desc", a.Description).Msg("action")
+		b.log.Info().Str("type", string(a.Type)).Int64("id", a.ID).Str("desc", a.Description).Msg("action")
 		var err error
 		switch a.Type {
 		case agent.ActionAddTask:
@@ -164,7 +164,7 @@ func (b *Bot) executeActions(ctx context.Context, actions []agent.Action) error 
 			err = b.store.SetSchedule(ctx, b.cfg.AllowedUserID, a.Schedule)
 		}
 		if err != nil {
-			logger.Error().Err(err).Str("action", string(a.Type)).Msg("action failed")
+			b.log.Error().Err(err).Str("action", string(a.Type)).Msg("action failed")
 		}
 	}
 	return nil

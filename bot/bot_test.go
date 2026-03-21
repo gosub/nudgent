@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gosub/nudgent/agent"
+	"github.com/gosub/nudgent/log"
 	"github.com/gosub/nudgent/store"
 )
 
@@ -126,6 +127,7 @@ func newFakeBot(ms *mockStore, ma *mockAgent) *fakeBot {
 			store: ms,
 			cfg:   Config{AllowedUserID: 1, Language: "en", NudgeIntervalM: 30},
 			loc:   time.UTC,
+			log:   log.Logger,
 		},
 		messages: []string{},
 	}

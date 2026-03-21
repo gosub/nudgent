@@ -11,7 +11,7 @@ func (b *Bot) nudgeScheduler(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(b.cfg.NudgeIntervalM) * time.Minute)
 	defer ticker.Stop()
 
-	l := logger.With().Str("handler", "nudge").Logger()
+	l := b.log.With().Str("handler", "nudge").Logger()
 	l.Debug().Int("interval_m", b.cfg.NudgeIntervalM).Msg("nudge scheduler started")
 
 	for {
@@ -26,7 +26,7 @@ func (b *Bot) nudgeScheduler(ctx context.Context) {
 }
 
 func (b *Bot) runNudgeCycle(ctx context.Context) {
-	l := logger.With().Str("handler", "nudge").Logger()
+	l := b.log.With().Str("handler", "nudge").Logger()
 
 	now := time.Now().In(b.loc)
 	nowISO := now.Format("2006-01-02T15:04:05")

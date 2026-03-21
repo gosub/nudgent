@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gosub/nudgent/log"
 )
 
@@ -18,12 +20,11 @@ const (
 	apiRetryBackoffBase = 2
 )
 
-var logger = log.Logger.With().Str("component", "agent").Logger()
-
 type Agent struct {
 	apiKey string
 	model  string
 	client *http.Client
+	log    zerolog.Logger
 }
 
 type Agenter interface {
@@ -37,6 +38,7 @@ func New(apiKey, model string) *Agent {
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: apiTimeoutSeconds * time.Second},
+		log:    log.Logger.With().Str("component", "agent").Logger(),
 	}
 }
 
@@ -75,7 +77,7 @@ func (a *Agent) Chat(ctx context.Context, systemPrompt string, userMessage strin
 	var lastErr error
 	for attempt := 0; attempt < apiMaxRetries; attempt++ {
 		if attempt > 0 {
-			logger.Warn().Int("attempt", attempt).Err(lastErr).Msg("retrying request")
+			a.log.Warn().Int("attempt", attempt).Err(lastErr).Msg("retrying request")
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -94,7 +96,7 @@ func (a *Agent) Chat(ctx context.Context, systemPrompt string, userMessage strin
 		return resp, nil
 	}
 
-	logger.Error().Int("attempts", apiMaxRetries).Err(lastErr).Msg("request failed after retries")
+	a.log.Error().Int("attempts", apiMaxRetries).Err(lastErr).Msg("request failed after retries")
 	return "", fmt.Errorf("request failed after retries: %w", lastErr)
 }
 

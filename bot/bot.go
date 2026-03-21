@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/rs/zerolog"
 
 	"github.com/gosub/nudgent/agent"
 	"github.com/gosub/nudgent/log"
@@ -17,8 +18,6 @@ const (
 	maxMessageLen       = 4000
 	telegramPollTimeout = 60
 )
-
-var logger = log.Logger.With().Str("component", "bot").Logger()
 
 type Config struct {
 	AllowedUserID  int64
@@ -35,6 +34,7 @@ type Bot struct {
 	loc     *time.Location
 	send    func(chatID int64, text string)
 	botName string
+	log     zerolog.Logger
 }
 
 func New(token string, a agent.Agenter, s store.Storager, cfg Config) (*Bot, error) {
@@ -55,10 +55,11 @@ func New(token string, a agent.Agenter, s store.Storager, cfg Config) (*Bot, err
 		cfg:     cfg,
 		loc:     loc,
 		botName: api.Self.UserName,
+		log:     log.Logger.With().Str("component", "bot").Logger(),
 	}
 	b.send = b.sendMessage
 
-	logger.Info().Str("account", api.Self.UserName).Msg("authorized on telegram")
+	b.log.Info().Str("account", api.Self.UserName).Msg("authorized on telegram")
 	return b, nil
 }
 
@@ -73,14 +74,14 @@ func (b *Bot) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			b.api.StopReceivingUpdates()
-			logger.Debug().Msg("stopped receiving updates")
+			b.log.Debug().Msg("stopped receiving updates")
 			return
 		case update := <-updates:
 			if update.Message == nil {
 				continue
 			}
 			if update.Message.From.ID != b.cfg.AllowedUserID {
-				logger.Debug().Int64("from", update.Message.From.ID).Msg("ignored message from unknown user")
+				b.log.Debug().Int64("from", update.Message.From.ID).Msg("ignored message from unknown user")
 				continue
 			}
 			b.handleMessage(ctx, update.Message)
@@ -112,7 +113,7 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 		if _, err := b.api.Send(msg); err != nil {
 			msg.ParseMode = ""
 			if _, err2 := b.api.Send(msg); err2 != nil {
-				logger.Error().Err(err2).Int64("chat_id", chatID).Msg("send message failed")
+				b.log.Error().Err(err2).Int64("chat_id", chatID).Msg("send message failed")
 			}
 		}
 	}
