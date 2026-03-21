@@ -57,10 +57,11 @@ Then run:
 
 ## Commands
 
-| Command  | Description              |
-|----------|--------------------------|
-| `/tasks` | List active tasks        |
-| `/help`  | Show usage               |
+| Command  | Description                                      |
+|----------|--------------------------------------------------|
+| `/tasks` | List active tasks with next nudge times          |
+| `/debug` | Show prefs and full task state (IDs, nudge times)|
+| `/help`  | Show usage                                       |
 
 Everything else — adding tasks, marking done, rescheduling, setting your schedule — is plain chat.
 
