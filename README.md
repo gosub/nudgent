@@ -2,6 +2,8 @@
 
 Intelligent nudge agent. Tracks your tasks, knows your schedule, and nudges you at the right time.
 
+*It starts with a nudge, and ends with an agent.*
+
 Runs as a single Go binary, communicates via Telegram, powered by OpenRouter models.
 
 ## How it works
