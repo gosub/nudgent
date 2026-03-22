@@ -14,6 +14,7 @@ func (b *Bot) nudgeScheduler(ctx context.Context) {
 
 	l := b.log.With().Str("handler", "nudge").Logger()
 	l.Debug().Int("interval_m", b.cfg.NudgeIntervalM).Msg("nudge scheduler started")
+	b.runNudgeCycle(ctx)
 
 	for {
 		select {
