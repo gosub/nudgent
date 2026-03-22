@@ -33,7 +33,11 @@ func BuildChatPrompt(language, schedule string, tasks []*store.Task, now time.Ti
 			if t.NextNudgeAt != "" {
 				nudge = t.NextNudgeAt
 			}
-			sb.WriteString(fmt.Sprintf("  %d. %s — next nudge: %s\n", t.ID, t.Description, nudge))
+			prefix := ""
+			if t.Recurring {
+				prefix = "↻ "
+			}
+			sb.WriteString(fmt.Sprintf("  %d. %s%s — next nudge: %s\n", t.ID, prefix, t.Description, nudge))
 		}
 		sb.WriteString("\n")
 	}
@@ -41,15 +45,15 @@ func BuildChatPrompt(language, schedule string, tasks []*store.Task, now time.Ti
 	sb.WriteString("Respond ONLY with a JSON object: {\"reply\": \"...\", \"actions\": [...]}\n")
 	sb.WriteString("No text outside the JSON. If no actions are needed, use \"actions\": [].\n\n")
 	sb.WriteString("Available actions:\n")
-	sb.WriteString("  {\"type\": \"add_task\",        \"description\": \"...\", \"next_nudge_at\": \"ISO8601\"}  — next_nudge_at optional\n")
-	sb.WriteString("  {\"type\": \"update_task\",     \"id\": N, \"description\": \"...\", \"next_nudge_at\": \"ISO8601\"}  — both fields optional\n")
+	sb.WriteString("  {\"type\": \"add_task\",        \"description\": \"...\", \"next_nudge_at\": \"ISO8601\", \"recurring\": true}  — next_nudge_at and recurring optional\n")
+	sb.WriteString("  {\"type\": \"update_task\",     \"id\": N, \"description\": \"...\", \"next_nudge_at\": \"ISO8601\", \"recurring\": true}  — all fields optional\n")
 	sb.WriteString("  {\"type\": \"complete_task\",   \"id\": N}\n")
 	sb.WriteString("  {\"type\": \"delete_task\",     \"id\": N}\n")
 	sb.WriteString("  {\"type\": \"update_schedule\", \"schedule\": \"...\"}\n")
 	sb.WriteString("Always use numeric id from the task list. When adding a task with a known time, always include next_nudge_at.\n")
 	sb.WriteString("next_nudge_at must be ISO 8601 (e.g. 2026-03-21T09:00:00). Respect the user's schedule.\n")
-	sb.WriteString("\nIMPORTANT: use complete_task only for one-off tasks the user is fully done with.\n")
-	sb.WriteString("For recurring tasks (daily, weekly, etc.), use update_task with the next next_nudge_at — never complete them.\n")
+	sb.WriteString("Set recurring: true when the task is habitual or repeats on a schedule; leave it false for one-off tasks.\n")
+	sb.WriteString("Recurring tasks (↻) must never be completed — use update_task with the next next_nudge_at instead.\n")
 
 	return sb.String()
 }
@@ -66,13 +70,16 @@ func BuildNudgePrompt(language, schedule string, tasks []*store.Task, now time.T
 
 	sb.WriteString("The following tasks are due for a nudge:\n")
 	for _, t := range tasks {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", t.ID, t.Description))
+		prefix := ""
+		if t.Recurring {
+			prefix = "↻ "
+		}
+		sb.WriteString(fmt.Sprintf("  %d. %s%s\n", t.ID, prefix, t.Description))
 	}
 
 	sb.WriteString("\nSend the user a short nudge. One task, one sentence, no fluff.\n")
 	sb.WriteString("If multiple tasks are due, pick the most urgent one.\n")
-	sb.WriteString("After nudging a recurring task, always use update_task to set the next next_nudge_at.\n")
-	sb.WriteString("Never use complete_task on recurring tasks — only on one-off tasks explicitly finished.\n")
+	sb.WriteString("After nudging a recurring task (↻), always use update_task to set the next next_nudge_at.\n")
 	sb.WriteString("If no nudge is appropriate right now, return empty reply.\n\n")
 	sb.WriteString("Respond: {\"reply\": \"...\", \"actions\": [...]}\n")
 	sb.WriteString("Actions available: update_task (id, description optional, next_nudge_at optional), complete_task (id), delete_task (id).\n")
