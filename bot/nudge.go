@@ -31,6 +31,7 @@ func (b *Bot) runNudgeCycle(ctx context.Context) {
 	l := b.log.With().Str("handler", "nudge").Logger()
 
 	now := time.Now().In(b.loc)
+	l.Debug().Str("now", now.Format("2006-01-02T15:04:05")).Msg("nudge cycle")
 	nowISO := now.Format("2006-01-02T15:04:05")
 
 	due, err := b.store.GetDueTasks(ctx, b.cfg.AllowedUserID, nowISO)
