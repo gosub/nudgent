@@ -87,6 +87,29 @@ func BuildNudgePrompt(language, schedule string, tasks []*store.Task, now time.T
 	return sb.String()
 }
 
+func BuildSchedulePrompt(language, schedule string, tasks []*store.Task, now time.Time) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are Nudgent, a scheduling assistant.\n")
+	sb.WriteString(fmt.Sprintf("Current time: %s\n", now.Format("2006-01-02T15:04:05 (Monday)")))
+	if schedule != "" {
+		sb.WriteString(fmt.Sprintf("User's schedule: %s\n\n", schedule))
+	}
+	sb.WriteString(fmt.Sprintf("Always respond in %s.\n\n", langName(language)))
+
+	sb.WriteString("The following tasks have no scheduled reminder time:\n")
+	for _, t := range tasks {
+		sb.WriteString(fmt.Sprintf("  %d. %s\n", t.ID, t.Description))
+	}
+
+	sb.WriteString("\nAssign each task a next_nudge_at using update_task actions.\n")
+	sb.WriteString("Base the time on the task description and the user's schedule. If unclear, schedule within 24 hours.\n")
+	sb.WriteString("Respond: {\"reply\": \"\", \"actions\": [...]}\n")
+	sb.WriteString("Actions: update_task (id, next_nudge_at required). No reply text.\n")
+
+	return sb.String()
+}
+
 func langName(code string) string {
 	switch code {
 	case "it":
