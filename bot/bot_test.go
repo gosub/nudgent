@@ -16,6 +16,7 @@ import (
 type mockStore struct {
 	prefs               *store.Prefs
 	tasks               []*store.Task
+	taskEvents          []store.TaskEvent
 	nextID              int64
 	ensurePrefsErr      error
 	getTasksErr         error
@@ -60,12 +61,12 @@ func (m *mockStore) SetConversationHistory(ctx context.Context, userID int64, hi
 	m.conversationHistory = history
 	return nil
 }
-func (m *mockStore) AddTask(ctx context.Context, userID int64, description string) (*store.Task, error) {
+func (m *mockStore) AddTask(ctx context.Context, userID int64, description string, recurring bool) (*store.Task, error) {
 	if m.addTaskErr != nil {
 		return nil, m.addTaskErr
 	}
 	m.nextID++
-	t := &store.Task{ID: m.nextID, UserID: userID, Description: description}
+	t := &store.Task{ID: m.nextID, UserID: userID, Description: description, Recurring: recurring}
 	m.tasks = append(m.tasks, t)
 	return t, nil
 }
@@ -88,6 +89,14 @@ func (m *mockStore) SetNextNudgeAt(ctx context.Context, id int64, next string) e
 	}
 	return nil
 }
+func (m *mockStore) SetRecurring(ctx context.Context, id int64, recurring bool) error {
+	for _, t := range m.tasks {
+		if t.ID == id {
+			t.Recurring = recurring
+		}
+	}
+	return nil
+}
 func (m *mockStore) CompleteTask(ctx context.Context, id int64) error {
 	m.lastCompleted = id
 	m.tasks = filterTasks(m.tasks, id)
@@ -100,6 +109,25 @@ func (m *mockStore) DeleteTask(ctx context.Context, id int64) error {
 }
 func (m *mockStore) GetDueTasks(ctx context.Context, userID int64, now string) ([]*store.Task, error) {
 	return m.tasks, nil
+}
+func (m *mockStore) GetTasksForPeriod(ctx context.Context, userID int64, from, to string) ([]*store.Task, error) {
+	var out []*store.Task
+	for _, t := range m.tasks {
+		if t.NextNudgeAt >= from && t.NextNudgeAt <= to {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+func (m *mockStore) GetEventsForPeriod(ctx context.Context, userID int64, eventType, from, to string) ([]*store.TaskEvent, error) {
+	var out []*store.TaskEvent
+	for i := range m.taskEvents {
+		e := &m.taskEvents[i]
+		if e.EventType == eventType && e.OccurredAt >= from && e.OccurredAt <= to {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 func filterTasks(tasks []*store.Task, id int64) []*store.Task {
@@ -193,8 +221,15 @@ func TestHandleCommandHelp(t *testing.T) {
 	if len(fb.messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(fb.messages))
 	}
-	if !contains(fb.messages[0], "/tasks") {
-		t.Errorf("help missing /tasks: %q", fb.messages[0])
+	msg := fb.messages[0]
+	if !contains(msg, "/tasks") {
+		t.Errorf("help missing /tasks: %q", msg)
+	}
+	if !contains(msg, "/today") {
+		t.Errorf("help missing /today: %q", msg)
+	}
+	if !contains(msg, "/week") {
+		t.Errorf("help missing /week: %q", msg)
 	}
 }
 
@@ -275,6 +310,21 @@ func TestExecuteActions_CompleteTask(t *testing.T) {
 	}
 }
 
+func TestExecuteActions_CompleteRecurring_Skipped(t *testing.T) {
+	ms := &mockStore{
+		prefs: &store.Prefs{Language: "en"},
+		tasks: []*store.Task{{ID: 7, Description: "Daily standup", Recurring: true}},
+	}
+	fb := newFakeBot(ms, &mockAgent{})
+	fb.executeActions(context.Background(), []agent.Action{{Type: agent.ActionCompleteTask, ID: 7}})
+	if ms.lastCompleted != 0 {
+		t.Errorf("expected recurring task to be skipped, but lastCompleted = %d", ms.lastCompleted)
+	}
+	if len(ms.tasks) != 1 {
+		t.Errorf("expected task to remain, but tasks = %v", ms.tasks)
+	}
+}
+
 func TestExecuteActions_DeleteTask(t *testing.T) {
 	ms := &mockStore{
 		prefs: &store.Prefs{Language: "en"},
@@ -328,6 +378,64 @@ func TestHandleChat_HistorySaved(t *testing.T) {
 	fb.handleChat(context.Background(), 1, "remind me about the meeting")
 	if ms.conversationHistory == "" {
 		t.Error("expected conversation history to be saved")
+	}
+}
+
+func TestHandleCommandToday_Empty(t *testing.T) {
+	ms := &mockStore{prefs: &store.Prefs{Language: "en"}}
+	fb := newFakeBot(ms, &mockAgent{})
+	fb.handleCommand(context.Background(), 1, "/today")
+	if len(fb.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(fb.messages))
+	}
+	if !contains(fb.messages[0], "Nothing scheduled") {
+		t.Errorf("expected empty message, got %q", fb.messages[0])
+	}
+}
+
+func TestHandleCommandToday_WithDone(t *testing.T) {
+	now := time.Now().UTC()
+	occurredAt := now.Format("2006-01-02T15:04:05")
+	ms := &mockStore{
+		prefs: &store.Prefs{Language: "en"},
+		taskEvents: []store.TaskEvent{
+			{ID: 1, TaskID: 10, UserID: 1, EventType: "completed", Description: "Call dentist", OccurredAt: occurredAt},
+		},
+	}
+	fb := newFakeBot(ms, &mockAgent{})
+	fb.handleCommand(context.Background(), 1, "/today")
+	if len(fb.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(fb.messages))
+	}
+	msg := fb.messages[0]
+	if !contains(msg, "Done:") {
+		t.Errorf("missing Done section: %q", msg)
+	}
+	if !contains(msg, "Call dentist") {
+		t.Errorf("missing completed task: %q", msg)
+	}
+}
+
+func TestHandleCommandToday_WithDue(t *testing.T) {
+	now := time.Now().UTC()
+	nudgeAt := now.Add(2 * time.Hour).Format("2006-01-02T15:04:05")
+	ms := &mockStore{
+		prefs: &store.Prefs{Language: "en"},
+		tasks: []*store.Task{
+			{ID: 1, Description: "Buy milk", NextNudgeAt: nudgeAt},
+		},
+	}
+	fb := newFakeBot(ms, &mockAgent{})
+	fb.handleCommand(context.Background(), 1, "/today")
+	if len(fb.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(fb.messages))
+	}
+	msg := fb.messages[0]
+	if !contains(msg, "Due:") {
+		t.Errorf("missing Due section: %q", msg)
+	}
+	if !contains(msg, "Buy milk") {
+		t.Errorf("missing due task: %q", msg)
 	}
 }
 
